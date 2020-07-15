@@ -79,7 +79,7 @@ module Faraday
         if !args.empty?
           send(key_setter, args.first)
         elsif block_given?
-          send(key_setter, Proc.new.call(key))
+          send(key_setter, yield(key))
         else
           raise self.class.fetch_error_class, "key not found: #{key.inspect}"
         end
@@ -151,9 +151,9 @@ module Faraday
         value = send(member)
         values << "#{member}=#{value.inspect}" if value
       end
-      values = values.empty? ? ' (empty)' : (' ' << values.join(', '))
+      values = values.empty? ? '(empty)' : values.join(', ')
 
-      %(#<#{self.class}#{values}>)
+      %(#<#{self.class} #{values}>)
     end
 
     # Internal

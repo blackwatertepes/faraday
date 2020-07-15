@@ -37,8 +37,10 @@ module Faraday
         Zlib::GzipFile::Error
       ]
 
-      exceptions << OpenSSL::SSL::SSLError if defined?(OpenSSL)
-      exceptions << Net::OpenTimeout if defined?(Net::OpenTimeout)
+      if defined?(::OpenSSL::SSL::SSLError)
+        exceptions << ::OpenSSL::SSL::SSLError
+      end
+      exceptions << ::Net::OpenTimeout if defined?(::Net::OpenTimeout)
 
       NET_HTTP_EXCEPTIONS = exceptions.freeze
 
@@ -47,16 +49,31 @@ module Faraday
         super(app, opts, &block)
       end
 
+      def build_connection(env)
+        net_http_connection(env).tap do |http|
+          if http.respond_to?(:use_ssl=)
+            http.use_ssl = env[:url].scheme == 'https'
+          end
+          configure_ssl(http, env[:ssl])
+          configure_request(http, env[:request])
+        end
+      end
+
+      def with_net_http_connection(env)
+        yield net_http_connection(env)
+      end
+    
+      def net_http_connection(env)
+        klass = proxy_class(env[:request][:proxy])
+        port = env[:url].port || (env[:url].scheme == 'https' ? 443 : 80)
+        klass.new(env[:url].hostname, port)
+      end
+
       def call(env)
         super
-        with_net_http_connection(env) do |http|
-          if (env[:url].scheme == 'https') && env[:ssl]
-            configure_ssl(http, env[:ssl])
-          end
-          configure_request(http, env[:request])
-
+        http_response = connection(env) do |http|
           begin
-            http_response = perform_request(http, env)
+            perform_request(http, env)
           rescue *NET_HTTP_EXCEPTIONS => e
             if defined?(OpenSSL) && e.is_a?(OpenSSL::SSL::SSLError)
               raise Faraday::SSLError, e
@@ -64,13 +81,13 @@ module Faraday
 
             raise Faraday::ConnectionFailed, e
           end
+        end
 
-          save_response(env, http_response.code.to_i,
-                        http_response.body || '', nil,
-                        http_response.message) do |response_headers|
-            http_response.each_header do |key, value|
-              response_headers[key] = value
-            end
+        save_response(env, http_response.code.to_i,
+                      http_response.body || +'', nil,
+                      http_response.message) do |response_headers|
+          http_response.each_header do |key, value|
+            response_headers[key] = value
           end
         end
 
@@ -108,7 +125,7 @@ module Faraday
               env[:request].on_data.call(chunk, size)
             end
           end
-          env[:request].on_data.call('', 0) unless yielded
+          env[:request].on_data.call(+'', 0) unless yielded
           # Net::HTTP returns something,
           # but it's not meaningful according to the docs.
           http_response.body = nil
@@ -128,27 +145,25 @@ module Faraday
       end
 
       def request_via_get_method(http, env, &block)
-        http.get env[:url].request_uri, env[:request_headers], &block
-      end
-
-      def request_via_request_method(http, env, &block)
-        if block_given?
-          http.request create_request(env) do |response|
-            response.read_body(&block)
-          end
-        else
-          http.request create_request(env)
+        # Must use Net::HTTP#start and pass it a block otherwise the server's
+        # TCP socket does not close correctly.
+        http.start do |opened_http|
+          opened_http.get env[:url].request_uri, env[:request_headers], &block
         end
       end
 
-      def with_net_http_connection(env)
-        yield net_http_connection(env)
-      end
-
-      def net_http_connection(env)
-        klass = proxy_class(env[:request][:proxy])
-        port = env[:url].port || (env[:url].scheme == 'https' ? 443 : 80)
-        klass.new(env[:url].hostname, port)
+      def request_via_request_method(http, env, &block)
+        # Must use Net::HTTP#start and pass it a block otherwise the server's
+        # TCP socket does not close correctly.
+        http.start do |opened_http|
+          if block_given?
+            opened_http.request create_request(env) do |response|
+              response.read_body(&block)
+            end
+          else
+            opened_http.request create_request(env)
+          end
+        end
       end
 
       def proxy_class(proxy)
@@ -178,7 +193,8 @@ module Faraday
       end
 
       def configure_ssl(http, ssl)
-        http.use_ssl = true
+        return unless ssl
+
         http.verify_mode = ssl_verify_mode(ssl)
         http.cert_store = ssl_cert_store(ssl)
 
@@ -193,17 +209,19 @@ module Faraday
       end
 
       def configure_request(http, req)
-        if req[:timeout]
-          http.read_timeout = req[:timeout]
-          http.open_timeout = req[:timeout]
-          if http.respond_to?(:write_timeout=)
-            http.write_timeout = req[:timeout]
-          end
+        if (sec = request_timeout(:read, req))
+          http.read_timeout = sec
         end
-        http.open_timeout = req[:open_timeout] if req[:open_timeout]
-        if req[:write_timeout] && http.respond_to?(:write_timeout=)
-          http.write_timeout = req[:write_timeout]
+
+        if (sec = http.respond_to?(:write_timeout=) &&
+                  request_timeout(:write, req))
+          http.write_timeout = sec
         end
+
+        if (sec = request_timeout(:open, req))
+          http.open_timeout = sec
+        end
+
         # Only set if Net::Http supports it, since Ruby 2.5.
         http.max_retries = 0 if http.respond_to?(:max_retries=)
 

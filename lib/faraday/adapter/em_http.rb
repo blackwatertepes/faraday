@@ -70,10 +70,9 @@ module Faraday
 
         # Reads out timeout settings from env into options
         def configure_timeout(options, env)
-          timeout, open_timeout = request_options(env)
-                                  .values_at(:timeout, :open_timeout)
-          options[:connect_timeout] = options[:inactivity_timeout] = timeout
-          options[:connect_timeout] = open_timeout if open_timeout
+          req = request_options(env)
+          options[:inactivity_timeout] = request_timeout(:read, req)
+          options[:connect_timeout] = request_timeout(:open, req)
         end
 
         # Reads out compression header settings from env into options
@@ -143,7 +142,8 @@ module Faraday
 
         raise Faraday::ConnectionFailed, e
       rescue StandardError => e
-        if defined?(OpenSSL) && e.is_a?(OpenSSL::SSL::SSLError)
+        if defined?(::OpenSSL::SSL::SSLError) && \
+           e.is_a?(::OpenSSL::SSL::SSLError)
           raise Faraday::SSLError, e
         end
 
@@ -229,11 +229,11 @@ module Faraday
           @running
         end
 
-        def add
+        def add(&block)
           if running?
             perform_request { yield }
           else
-            @registered_procs << Proc.new
+            @registered_procs << block
           end
           @num_registered += 1
         end

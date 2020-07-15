@@ -1,3 +1,8 @@
+## Faraday 2.0
+
+### Others
+* Rename `Faraday::Request#method` to `#http_method`.
+
 ## Faraday 1.0
 
 ### Errors
@@ -11,7 +16,14 @@ Please note `Faraday::ClientError` was previously used for both.
   * Faraday::UnauthorizedError (401)
   * Faraday::ForbiddenError (403)
   * Faraday::ProxyAuthError (407). Please note this raised a `Faraday::ConnectionFailed` before.
+  * Faraday::ConflictError (409)
   * Faraday::UnprocessableEntityError (422)
+* The following error classes have changed the hierarchy to better mirror their real-world usage and semantic meaning:
+  * TimeoutError < ServerError (was < ClientError)
+  * ConnectionFailed < Error (was < ClientError)
+  * SSLError < Error (was < ClientError)
+  * ParsingError < Error (was < ClientError)
+  * RetriableResponse < Error (was < ClientError)
 
 ### Custom adapters
 If you have written a custom adapter, please be aware that `env.body` is now an alias to the two new properties `request_body` and `response_body`.
@@ -19,7 +31,7 @@ This should work without you noticing if your adapter inherits from `Faraday::Ad
 
 ### Others
 * Dropped support for jruby and Rubinius.
-* Officially supports Ruby 2.3+
+* Officially supports Ruby 2.4+
 * In order to specify the adapter you now MUST use the `#adapter` method on the connection builder. If you don't do so and your adapter inherits from `Faraday::Adapter` then Faraday will raise an exception. Otherwise, Faraday will automatically push the default adapter at the end of the stack causing your request to be executed twice.
 ```ruby
 class OfficialAdapter < Faraday::Adapter
@@ -45,4 +57,3 @@ conn = Faraday.new(...) do |f|
   f.adapter AnyAdapter
 end
 ```
-

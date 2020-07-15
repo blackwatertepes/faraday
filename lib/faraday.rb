@@ -19,8 +19,8 @@ require 'faraday/dependency_loader'
 #   conn.get '/'
 #
 module Faraday
-  VERSION = '0.15.3'
-  METHODS_WITH_QUERY = %w[get head delete connect trace].freeze
+  VERSION = '1.0.1'
+  METHODS_WITH_QUERY = %w[get head delete trace].freeze
   METHODS_WITH_BODY = %w[post put patch].freeze
 
   class << self
@@ -153,14 +153,14 @@ module Faraday
     @default_connection_options = ConnectionOptions.from(options)
   end
 
-  unless const_defined? :Timer
+  unless defined?(::Faraday::Timer)
     require 'timeout'
     Timer = Timeout
   end
 
   require_libs 'utils', 'options', 'connection', 'rack_builder', 'parameters',
-               'middleware', 'adapter', 'request', 'response', 'upload_io',
-               'error'
+               'middleware', 'adapter', 'request', 'response', 'error',
+               'file_part', 'param_part'
 
   require_lib 'autoload' unless ENV['FARADAY_NO_AUTOLOAD']
 end

@@ -6,39 +6,41 @@ module Faraday
     class Excon < Faraday::Adapter
       dependency 'excon'
 
+      def build_connection(env)
+        opts = opts_from_env(env)
+        ::Excon.new(env[:url].to_s, opts.merge(@connection_options))
+      end
+
       def call(env)
         super
 
-        opts = opts_from_env(env)
-        conn = create_connection(env, opts)
-
-        resp = conn.request(method: env[:method].to_s.upcase,
-                            headers: env[:request_headers],
-                            body: read_body(env))
+        req_opts = {
+          method: env[:method].to_s.upcase,
+          headers: env[:request_headers],
+          body: read_body(env)
+        }
 
         req = env[:request]
         if req&.stream_response?
-          warn "Streaming downloads for #{self.class.name} are not yet " \
-               ' implemented.'
-          req.on_data.call(resp.body, resp.body.bytesize)
+          total = 0
+          req_opts[:response_block] = lambda do |chunk, _remain, _total|
+            req.on_data.call(chunk, total += chunk.size)
+          end
         end
+
+        resp = connection(env) { |http| http.request(req_opts) }
         save_response(env, resp.status.to_i, resp.body, resp.headers,
                       resp.reason_phrase)
 
         @app.call(env)
       rescue ::Excon::Errors::SocketError => e
-        raise Faraday::TimeoutError, e if e.message =~ /\btimeout\b/
+        raise Faraday::TimeoutError, e if e.message.match?(/\btimeout\b/)
 
-        raise Faraday::SSLError, e if e.message =~ /\bcertificate\b/
+        raise Faraday::SSLError, e if e.message.match?(/\bcertificate\b/)
 
         raise Faraday::ConnectionFailed, e
       rescue ::Excon::Errors::Timeout => e
         raise Faraday::TimeoutError, e
-      end
-
-      # @return [Excon]
-      def create_connection(env, opts)
-        ::Excon.new(env[:url].to_s, opts.merge(@connection_options))
       end
 
       # TODO: support streaming requests
@@ -90,17 +92,17 @@ module Faraday
       end
 
       def amend_opts_with_timeouts!(opts, req)
-        timeout = req[:timeout]
-        return unless timeout
+        if (sec = request_timeout(:read, req))
+          opts[:read_timeout] = sec
+        end
 
-        opts[:read_timeout] = timeout
-        opts[:connect_timeout] = timeout
-        opts[:write_timeout] = timeout
+        if (sec = request_timeout(:write, req))
+          opts[:write_timeout] = sec
+        end
 
-        open_timeout = req[:open_timeout]
-        return unless open_timeout
+        return unless (sec = request_timeout(:open, req))
 
-        opts[:connect_timeout] = open_timeout
+        opts[:connect_timeout] = sec
       end
 
       def amend_opts_with_proxy_settings!(opts, req)
